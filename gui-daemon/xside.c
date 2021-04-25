@@ -60,6 +60,10 @@
 #include "png.h"
 #include "trayicon.h"
 #include "shm-args.h"
+#ifdef XI2
+#include <X11/extensions/XInput.h>
+#include <X11/extensions/XInput2.h>
+#endif
 
 /* Supported protocol version */
 
@@ -368,6 +372,19 @@ static Window mkwindow(Ghandles * g, struct windowdata *vm_window)
                 ButtonPressMask | ButtonReleaseMask |
                 PointerMotionMask | EnterWindowMask | LeaveWindowMask |
                 FocusChangeMask | StructureNotifyMask | PropertyChangeMask);
+#ifdef XI2
+    XIEventMask eventmask;
+    unsigned char mask[XIMaskLen(XI_LASTEVENT)];
+    memset(mask, 0, sizeof(mask));
+    //eventmask.deviceid = XIAllMasterDevices;
+    eventmask.deviceid = XIAllDevices;
+    eventmask.mask_len = sizeof(mask);
+    eventmask.mask = mask;
+    XISetMask(mask, XI_TouchBegin);
+    XISetMask(mask, XI_TouchUpdate);
+    XISetMask(mask, XI_TouchEnd);
+    XISelectEvents(g->display, child_win, &eventmask, 1);
+#endif
     XSetWMProtocols(g->display, child_win, &g->wmDeleteMessage, 1);
     if (g->icon_data) {
         Atom atom_icon = XInternAtom(g->display, "_NET_WM_ICON", 0);
@@ -1908,11 +1925,46 @@ static void process_xevent_xembed(Ghandles * g, const XClientMessageEvent * ev)
 
 }
 
+#ifdef XI2
+/* Process touch events */
+static void process_xievent_touch(Ghandles * g, const XEvent * ev)
+{
+    struct msg_hdr hdr;
+    struct msg_touch k;
+    XIDeviceEvent * event = (XIDeviceEvent *) ev->xcookie.data;
+
+    CHECK_NONMANAGED_WINDOW(g, event->event);
+    g->last_input_window = vm_window;
+
+    k.x = event->root_x;
+    k.y = event->root_y;
+    k.touchid = event->detail;
+    k.eventtype = ev->xcookie.evtype;
+    hdr.type = MSG_TOUCH;
+    hdr.window = vm_window->remote_winid;
+    write_message(g->vchan, hdr, k);
+}
+#endif
+
 /* dispatch local Xserver event */
 static void process_xevent(Ghandles * g)
 {
     XEvent event_buffer;
     XNextEvent(g->display, &event_buffer);
+#ifdef XI2
+    if (event_buffer.xcookie.type == GenericEvent/* && event_buffer.xcookie.extension == xi_opcode*/) {
+        XGetEventData(g->display, &event_buffer.xcookie);
+        switch (event_buffer.xcookie.evtype) {
+            case XI_TouchBegin:
+            case XI_TouchUpdate:
+            case XI_TouchEnd:
+                process_xievent_touch(g, & event_buffer);
+                break;
+        }
+        XFreeEventData(g->display, &event_buffer.xcookie);
+        return;
+    }
+#endif
     switch (event_buffer.type) {
     case KeyPress:
     case KeyRelease:
@@ -3950,6 +4002,20 @@ int main(int argc, char **argv)
         }
     }
     vchan_register_at_eof(restart_guid);
+
+#ifdef XI2
+    int xi_opcode, event, error;
+    if(!XQueryExtension(ghandles.display, "XInputExtension", &xi_opcode, &event, &error)) {
+        printf("X Input extension not available.\n");
+        exit(1);
+    }
+    int rc, major = 2, minor = 2;
+    rc = XIQueryVersion(ghandles.display, &major, &minor);
+    if(rc != Success) {
+        printf("X Input extension version error.\n");
+        exit(1);
+    }
+#endif
 
     get_protocol_version(&ghandles);
     send_xconf(&ghandles);

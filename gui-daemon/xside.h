@@ -51,6 +51,11 @@
 // Special window ID meaning "whole screen"
 #define FULLSCREEN_WINDOW_ID 0
 
+// Process touch events using XInput2
+#ifndef XI2
+#define XI2
+#endif
+
 #define MAX_EXTRA_PROPS 10
 
 #define MAX_SCREENSAVER_NAMES 10
